@@ -1,0 +1,1061 @@
+
+
+start FSR(dataset = "", 
+	independent_vars_input, 
+	dependent_var_input, 
+	options="", 
+	initial_obs_input = ., 
+	id_var_input = "", 
+	init=., 
+	transformation_lambda=., 
+	output_dataset = "", 
+	h_min=10,
+	lxs_options = .,
+	constr = .,
+	R2_threshold = 0.9999999, 
+	bsbmfullrank = "PREVIOUS",
+	fs_step = 1,
+	bonflev=.) 
+	
+global(n,ssr, selected, m0, BoxCoxScore, resid_all, mdr, un_fsstep, beta_all, cooks, nor, msr, outlier_classification, initial_obs, s2, r2, mm);
+/* force regression through origin*/
+force_origin = 0;
+force_lxs_origin = 0;
+/*force no plots*/
+force_no_plots = 0;
+/*force FS init*/
+force_init = 1;
+	/************************************************************/
+	/* Input parameters (with examples)							*/
+	/*                                                          */
+	/************************************************************/
+
+	options = upcase(options);
+	debug = 0;
+	if  index(options, "DEBUG") > 0  then do;
+		debug = 1;
+		print "Called Forward Search with parameters" 
+			 dataset
+			 independent_vars_input
+			 dependent_var_input
+			 options
+			 initial_obs_input
+			 transformation_lambda
+			 h_min
+			 output_dataset
+			 init
+			 lxs_options;
+	end;
+
+	if  index(options, "NO_INTERCEPT") > 0  then
+		add_intercept = 0;
+	else
+		add_intercept = 1;
+		
+	/*force to do regression without intercept*/
+	if force_origin = 1	then
+		add_intercept = 0;
+	
+	
+	
+	if  index(options, "NO_PLOTS") > 0  then
+		add_plots = 0;
+	else
+		add_plots = 1;
+		
+	/*force no plots*/
+	if force_no_plots =1 then
+		add_plots = 0;	
+	if nrow(transformation_lambda) + ncol(transformation_lambda) > 2 then do;
+		print "ERROR: Lambda should be a scalar, not a matrix. Use FSFanplot to compare different values of lambda";
+		print "Terminating FS...";
+		stop;
+	end;
+	
+	if index(options, "BETA") > 0 then
+		output_beta = 1;
+	else
+		output_beta = 0;
+		
+	if index(options, "EDA") > 0 then do;
+		output_eda = 1;
+		output_beta =1;
+	end;
+	else
+		output_eda = 0;
+		
+	bsbmfullrank = upcase(bsbmfullrank);
+	
+	if  index(options, "PERFECT_FIT_CORRECTION") > 0  then
+		PERFECT_FIT_CORRECTION = 1;
+	else
+		PERFECT_FIT_CORRECTION = 0;
+		
+	/*
+	if index(options, "BSBMFULLRANK") > 0 then
+		bsbmfullrank = "FORCE_END"; /* Matlab: bsbmfullrank = 1: Force observations that give rise to a singular X matrix to the end of the search */
+	/*else if index(options, "EXCLUDE_SINGULAR") then
+		bsbmfullrank = "EXCLUDE"; /* Restart LXS without the observations that give rise to a singular X matrix, but don't force them to the end of the search */
+	/*else if index(options, "SINGULAR_GINV") then
+		bsbmfullrank = "GINV";
+	else;
+		bsbmfullrank = "IGNORE"; /* Matlab: bsbmfullrank = 0: Ignore and use previous succesful beta values */
+		
+	env_quantiles = {0.99999 0.9999 0.999 0.99 0.50 0.01 };
+	
+	keep_corr=0;
+	
+	
+	/* overwrite built in rank function */
+	start rankSITAF(m);
+		return (round(trace(ginv(m)*m)));
+	finish;
+	
+	/* add len function */
+	start len(v);
+		return (ncol(v) * nrow(v));
+	finish;
+
+	/************************************************************/
+	/* Load data												*/
+	/*                                                          */
+	/************************************************************/
+	CALL FSLoadData(	dataset,
+		independent_vars_input, 
+		dependent_var_input, 
+		id_var_input,
+		x,
+		y ,
+		id,
+		dependent_varname,
+		independent_varnames,
+		id_varname,
+		add_intercept,
+		"REGRESSION"
+	);
+
+
+	/* Delete observations with missing values */
+	n_original = nrow(x);
+	valid_observations_idx = loc((missing(x[,+]) + missing(y))=0);
+	
+	x_original = x;
+	y_original = y;
+
+	x=x[valid_observations_idx,];
+	y=y[valid_observations_idx,];
+	
+	
+	n = nrow(x);					/* Total number of observations used in FS*/
+	p  = ncol(x); 		   			/* Number of variables */	
+	if debug then do;
+		print "Total number of observations" n_original;
+		print "Number of observations that were deleted because of missing values: " (n_original - n);
+		print "Number of observations used in forward search:" n;
+		print "Number of variables" p;
+		
+	end;
+	/************************************************************/
+	/* Initial subset selection							        */
+	/*                                                          */
+	/************************************************************/	
+	
+	user_initial_obs = 0;
+	lxs_retry = 1;
+	initial_obs = .;
+	
+		
+do lxs_tries = 1 to 6 while (lxs_retry);		
+	lxs_retry = 0;
+	
+	if bsbmfullrank = "MERGE" & nrow(merged_obs_nr) > 0 then do;
+		print (cat("WARNING: The following observations are merged with observation  ",merged_obs_nr[1, 1])),  (merged_obs_nr[, 2]);
+		
+		valid_observations_idx = setdif(valid_observations_idx, merged_obs_nr[, 2]);
+		
+		x=x_original[valid_observations_idx,];
+		y=y_original[valid_observations_idx,];
+	end;
+	
+	if constr = . then
+		idx_in = 1:nrow(x);
+	else 
+		idx_in = setdif(1:n, constr);
+
+		
+	n = nrow(x);				/* Total number of observations used in FS*/
+		
+	idx_in = colvec(idx_in);
+	
+	if initial_obs_input = -1 | initial_obs_input = . then do; /* Perform LMS */
+		if lxs_options = . then do;
+			ncomb=comb(nrow(x),ncol(x));
+			if ncomb < 10000 then ncomb = -1; /* use all subsets if the number of combinations < 10000*/
+			else ncomb = 10000;
+			
+			lxs_options = j(8,1,.);
+			lxs_options[5] = ncomb;			/* Nrep the number Nrep of generated subsets, set to -1 for an exhaustive search */
+			
+			/*if the user selected a FS model without intercept (add_intercept = 0), also LXS has to be run without intercept (lxs_options[1] = 1).*/
+			if add_intercept = 0 then  
+				lxs_options[1] = 1;
+			/*force the lms to be run without intercept*/
+			if force_lxs_origin = 1 then
+				lxs_options[1] = 1;  /* 1-add_intercept*/
+	end;
+		if debug then print "Calling LMS to calculate the initial subset.";
+		
+		constant_columns = loc(var(x[idx_in,]) = 0);
+
+		if ncol(constant_columns)> 0 then do;
+			if ncol(constant_columns) = ncol(x) then do;
+				print "ERROR: Only constant variables for valid observations";
+				abort;
+			
+			end;
+			else
+				col_idx = setdif(1:(ncol(x)), constant_columns);
+		end;
+		else
+			col_idx = 1:(ncol(x));
+		
+		CALL LMS(sc,coef,wgt,lxs_options,y[idx_in,],x[idx_in,col_idx]);
+
+		 /*print(cat("coefprima",coef));*/
+		 /*when there is only one explanatoruy variable and no intercept, the Barreto (2006) deterministic algorithm is used instead of POROGRESS from Mia Hubert. In this case there is not as output the best subset. It is necessary to crete it taking the observation with the smallest residual*/ 
+		 if col_idx = 1 & lxs_options[1] = 1 then do;
+			/*coef[2, ] = loc(min(abs(wgt[2,]))=wgt[2,]);*/
+			coef[2, ] = loc(abs(wgt[2,])=min(abs(wgt[2,])));
+		 end;
+		 /*print(cat("coefdopo",coef));*/
+		/*CALL LMSAldo(coef,x[idx_in,col_idx],y[idx_in,],1000);*/	
+		/* http://support.sas.com/documentation/cdl/en/imlug/59656/HTML/default/viewer.htm#langref_sect159.htm */
+		if any(coef[2, ] = .) then do;
+			print "ERROR: LMS failed to converge";
+			abort;
+		end;
+		else
+			initial_obs=idx_in[coef[2,]];
+	end;
+	else if initial_obs_input = -2 then do; /* Perform LTS */
+	
+		if lxs_options = . then do;
+			ncomb=comb(nrow(x),ncol(x));
+			if ncomb < 10000 then ncomb = -1; /* use all subsets if the number of combinations < 10000*/
+			else ncomb = 10000;
+			
+			lxs_options = j(9,1,.);
+			lxs_options[5] = ncomb;			/* Nrep the number Nrep of generated subsets, set to -1 for an exhaustive search */
+			lxs_options[9] = 1;				/* Don't use FAST-LTS */
+		end;
+		if debug then print "Calling LTS to calculate the initial subset.";
+		
+		constant_columns = loc(var(x[idx_in,]) = 0);
+		if ncol(constant_columns)> 0 then do;
+			if ncol(constant_columns) = ncol(x) then do;
+				print "ERROR: Only constant variables for valid observations";
+				abort;
+			
+			end;
+			else
+				col_idx = setdif(1:(ncol(x)), constant_columns);
+		end;
+		else
+			col_idx = 1:(ncol(x));
+			
+		CALL LTS(sc,coef,wgt,lxs_options,y[idx_in,],x[idx_in,col_idx]);
+
+		/* http://support.sas.com/documentation/cdl/en/imlug/59656/HTML/default/viewer.htm#langref_sect159.htm */
+		if any(coef[2, ] = .) then do;
+			print "ERROR: LMS failed to converge";
+			abort;
+		end;
+		else
+			initial_obs=idx_in[coef[2,]];
+	end;
+	else if initial_obs_input = -3 then do;
+		m0 = ncol(x)+1;
+		not_ok= true;
+		
+		do i=1 to 100 while (not_ok);
+			
+			initial_obs = idx_in[sample(1:nrow(idx_in),m0, "NoReplace")];
+						
+			if (rankSITAF(x[initial_obs,]) = ncol(x)) then not_ok=false;
+		end;
+		
+		if (rankSITAF(x[initial_obs,]) ^= ncol(x)) then do;
+			print "Unable to randomly sample full rank X matrix";
+			*abort;
+		end;
+	
+	end;
+	else do;
+		initial_obs = initial_obs_input; * vector with observations;
+	
+		if (max(initial_obs) <= nrow(x)) & (min(initial_obs) > 0) & (sum(missing(initial_obs))= 0) then do;
+			/* Translate the old observation numbers to the new ones. */
+			a=j(n_original,1,0); 			
+			a[initial_obs] = 1;
+			initial_obs = loc(a[valid_observations_idx,]);
+			
+			user_initial_obs = 1;
+		end;
+	end;
+	
+	/* Check if initial subset is reasonable*/
+	if max(initial_obs) > nrow(x) then do;
+		print "ERROR: Invalid value specified for initial subset. Observation " (max(initial_obs)) " should be in the initial subset but there are only " (nrow(x)) " observations in total.";
+		print "Terminating FSR...";
+		stop;
+	end;
+	else if min(initial_obs) <= 0 then do;
+		print "ERROR: Negative number specified for observation number in initial subset.";
+		print "Terminating FSR...";
+		stop;
+	end;
+	
+	if sum(missing(initial_obs))>0 then do;
+		print "ERROR: Initial subset contains missing values";
+		print "Terminating FSR...";
+		stop;
+	end;
+	
+	if max(nrow(initial_obs), ncol(initial_obs)) > (nrow(x)) then do;
+		print "WARNING: Too many observations in initial subset. Only the first" (nrow(x)) "will be used";
+		initial_obs = initial_obs[1:ncol(x)];
+	end;
+	initial_obs = rowvec(initial_obs);
+	
+	if debug then print "Starting forward search with initial subset" (initial_obs); 
+	
+	m0 = ncol(initial_obs);			/* Number of observations in initial subset */
+	
+	if len(initial_obs) < p then do;
+		if debug then print (cat("Number of observations in initial subset ", m0, " < p. Selecting random initial subset"));
+		m0 = ncol(x)+1;
+		not_ok= 1;
+		
+		do i=1 to 100 while (not_ok);
+			
+			initial_obs = idx_in[sample(1:nrow(idx_in),m0, "NoReplace")];
+						
+			if (rankSITAF(x[initial_obs,]) = ncol(x)) then not_ok=0;
+		end;
+		
+		if (rankSITAF(x[initial_obs,]) ^= ncol(x)) then do;
+			print "Unable to randomly sample full rank X matrix";
+			*abort;
+		end;
+		initial_obs = rowvec(initial_obs);
+
+	end;
+	
+	
+	/************************************************************/
+	/* Initialize variables   				                    */
+	/*                                                          */
+	/************************************************************/
+
+	n_iterations = floor((n-m0)/fs_step)+1;
+	mm = do(m0, m0+(n_iterations-1) * fs_step, fs_step);
+	
+	if index(options, "EXPORT_FS_SUBSETS") then do;
+		keep_selected = 2;
+		endName = "i" + strip(char(n));
+		if exist("bb") then call delete("work.bb");
+		create work.bb var ("obs" || ("i1":endName)); /* opens a dataset for exporting selected observations */
+	end;
+	else if index(options, "FS_SUBSETS") > 0 | index(options, "CLASSIFY") | index(options, "EXPORT") then do;
+		keep_selected = 1;
+		selected = j(n_iterations+1,n,.); 		  		/* Matrix that contains the observation numbers that are in the current set. For each iteration, a column is filled */
+	end;
+	else do;
+		keep_selected = 0;
+		selected = j(1,m0,.); 				/* Column vector that contains the observation numbers that are in the subset in the next iteration*/
+	end;
+	
+	
+/*  init :     scalar, specifies the point where to initialize the search
+               and start monitoring required diagnostics. If it is not
+               specified it is set equal to:
+               p+1, if the sample size is smaller than 40;
+               min(3*p+1,floor(0.5*(n+p+1))), otherwise.  */	
+	/*if initial_obs_input ^=. then
+	init =ncol(initial_obs_input);
+	
+	if init = . then 
+		if n<40 then init=p+1;
+		else init=min(3*p+1,floor(0.5*(n+p+1)));
+		
+	if init < m0  then init = m0; */
+	
+    /*force init to be n/2*/
+	if force_init = 1	then
+	init = floor(0.5*(n+p+1));
+				   
+	if keep_selected = 1 then
+		selected[1,] =  initial_obs || j(1,n-m0,.);
+	else
+		selected =  initial_obs;
+		
+	MDR = j(n,1,.);						/* Minimum deletion residuals at each step*/
+	
+
+	ssr = j(n,1,.);						/* Error sum of squares at each step */
+	if output_eda then do;
+		cooks = j(n_iterations,6,.);	/* Cook's distance (column 1) and modified Cook's distance (column 2) at each step */
+		s2_previous = .;
+		
+		nor = j(n_iterations,3,.);		/*  1th column: Asymmetry test 
+											2nd column: Kurtosis test
+											3rd column: Normality test */
+											
+		MSR = j(n_iterations,1,.);		/* Maximum studentized residual */
+		
+		R2 = j(n_iterations,1,.);		/* R-squared */
+	end;
+
+	mdagger = .;						/* Number of observations in the regression when a signal is detected */
+	
+	Un_fsstep = j(n_iterations, 2, .);
+	
+/*  Un:        n x ? Matrix which contains the unit(s) included
+               in the subset at each step of the search.
+               REMARK: in every step the new subset is compared with the
+               old subset. Un contains the unit(s) present in the new
+               subset but not in the old one.
+               Un[init+1,] for example contains the unit included in step
+               init+1.
+               Un[n, ] contains the units included in the final step
+               of the search.
+*/
+	if fs_step < 20 then
+		max_interchange = 10 + (fs_step-1) * 90/19;
+	else
+		max_interchange = fs_step * 5;
+		
+	if transformation_lambda ^= . then do;
+		if debug then print "Transformation of the response variable, lambda = " transformation_lambda;
+
+		original_y = y;
+		call TransformationOfResponse(transformation_lambda, original_y, y);
+		BoxCoxScore = j(n,1,.);
+	end;
+	
+	keep_res = 0;
+	if index(options, "KEEP_RESIDUALS") > 0  | index(options, "RESFWDPLOT") > 0 then do;
+		keep_res = 1;
+		resid_all = j(n,n_iterations,.);			/* Matrix that contains all scaled residuals in every step */
+		if debug then print "Keeping all deletion residuals";
+	end;
+	
+	if (rankSITAF(X`*X)) < p then do;
+		print "ERROR: The model is not full rank: one of the variables is a linear combination of the other variables.";
+		print "Terminating FS...";
+		return;
+	end;
+	
+	if index(options, "EXPORT") > 0 then
+		if output_dataset = "" then do;
+			if dataset ^= "" then do;
+				dot = index(dataset, ".");
+				if dot > 0 then tablename = substr(dataset, dot+1);
+				else tablename = dataset;
+				output_dataset = cat("work.", tablename);
+			end;
+			else
+				output_dataset = "work.fs_output";
+		end;
+	
+
+	if output_beta then do;
+		beta_p_values = j(p,n_iterations, .); 	/* Each iteration, a column is filled with the estimated beta coefficients of a linear regression using the selected observations */
+		beta_test = j(p,n_iterations, .);  
+		beta_all = j(p,n_iterations, .);		
+		beta_outliers = j(1,n, .);
+	end;
+
+	/************************************************************/
+	/*     Main loop of Forward Search                          */
+	/*                                                          */
+	/************************************************************/
+
+	DO i= 1 TO n_iterations;
+		m=m0+(i-1)*fs_step;				/* Number of observations in the current set */
+		/* so i = (m - m0)/fs_step + 1*/
+		
+		if keep_selected = 1 then
+			idx_in = selected[i,1:m]; 		/* Indices of current selected observations */
+		else
+			idx_in = selected[1:m]; 
+			
+		idx_out = setdif((1:n),idx_in); 	/* Indices of current not selected observations */
+
+		Xin  = x[idx_in,];
+		Yin  = y[idx_in,];
+
+		if rankSITAF(Xin) = p & rankSITAF(Xin`*Xin) = p  then do;
+			beta = SOLVE(Xin`*Xin,Xin`*Yin);/* fails if X`X is singular*/
+			
+			rank_problem = 0;
+				
+			iXpX = inv(Xin`*Xin);
+			
+	
+		end;
+		else do;
+	
+			rank_problem = 1;
+			/* rank problem */	
+			if bsbmfullrank = "FORCE_END" | bsbmfullrank = "EXCLUDE" | bsbmfullrank = "MERGE"  then do;
+				_idx_out = idx_out;
+				_idx_in = rowvec(idx_in);
+				full_rank = 0;
+				
+				do while(full_rank = 0);
+					_idx_out = rowvec(setdif((1:n),_idx_in)); 
+					
+					do ii = 1 to ncol(_idx_out);
+						_Xin = x[_idx_in,] // x[_idx_out[ii],];
+						if rankSITAF(_Xin) = p then do;
+							full_rank = 1; /* only stop the do loop when a full rank matrix is obtained regardless of which point you add next*/
+						end;
+						else do;
+							full_rank = 0; /* add observation that keeps matrix singular*/
+							
+							_idx_in = _idx_in || _idx_out[ii]; /* add observations that makes matrix singular */
+							ii = ncol(_idx_out); /* break loop */
+						end;
+		
+					end;
+				end;
+				
+				if bsbmfullrank = "MERGE" then do;
+					_n = len(_idx_in);
+
+					merged_obs_nr = merged_obs_nr // ( j(_n-1, 1, valid_observations_idx[_idx_in[1]]) || colvec(valid_observations_idx[_idx_in[2:_n]]));	
+					/*merged_obs_nr :   1st col: obs nr that is kept in FS
+										2nd col: obs that is deleted
+										(uses original observation numbers) */
+					lxs_retry = 1;
+					i = n; /* break FS loop*/
+				end;
+				else do;
+					if constr = . then
+						constr = _idx_in;
+					else
+						constr = unique(constr || _idx_in);				
+									
+					if debug then do;
+						bsbsing = ncol(constr);
+						singular_obs = constr;
+						call sort(singular_obs);
+						print "Observations that produce a singular matrix " singular_obs;
+
+						if bsbsing > n/2 then do;
+							print (cat("More than half (", bsbsing, " out of ", n, ") of the observations produce a singular X matrix"));
+							print 'X is badly defined';
+							print 'Select MERGE for option BSBMFULLRANK to ignore. See documentation for more details.';
+							abort;
+						end;
+						/* else if user_initial_obs then do;
+							print 'Bad starting point which produced a singular matrix, please restart the search from a different starting point or use option bsbmfullrank=0';
+							abort;
+						end;*/
+					end;
+				end;
+				
+				if lxs_tries < 6 then do;
+					/* RERUN LXS without _idx_in*/
+					if debug then 
+						print "Retrying LXS. Attempt " lxs_tries;
+
+			
+					lxs_retry = 1;
+					i = n; /* break FS loop*/
+					
+				end;
+				else if lxs_tries >= 5 then do;
+					if debug then do;
+						print 'No convergence after 6 tries to choose initial subset';
+					end;
+					abort;
+				end;
+			end;
+			else
+				if debug then print "WARNING: Singular X matrix in step " i ", MDR set to missing";
+				
+			if bsbmfullrank = "GINV" then 
+				beta = ginv(Xin)*Yin; 
+			else if bsbmfullrank = "PREVIOUS" & ncol(beta) = 0 then beta = .;
+
+		end; /* if Xin not full rank */
+
+		if ^lxs_retry then do;
+			resid  = y - x * beta;				/* simple residuals */
+			
+			if m >= init then do;				/* Do the search */
+				ssr[m] = ssq(resid[idx_in]); 		/* keep the residual sum of squares for when FS is called with model selection option*/
+				ss_tot = ssq(yin-mean(yin));
+				if (nrow(Xin)-p)=0 then 
+					s2=ssr[m]/1; 
+				else 
+					s2=ssr[m]/(m-p);
+							
+				if PERFECT_FIT_CORRECTION then do;
+					_r2 = 1 -  ssr[m] / ss_tot;
+					
+					if _r2 > R2_threshold then do;/* Perfect fit: replace s2 with threshold s2 */
+						if debug then print "WARNING: exact fit for linear regression in step " i "Replacing estimated MSE with threshold MSE ";
+						
+						/* SAS PROPOSAL: always use value of threshold */
+						/*if (nrow(Xin)-p)=0 then 
+							s2 = ss_tot * (1 - r2_threshold );
+						else
+							s2 = ss_tot / (m-p) * (1 - r2_threshold);
+					*/
+						/* JRC PROPOSAL: only use threshold if the correction is not too big */
+						 
+						
+						if (nrow(Xin)-p)=0 then 
+							s2=ssr[m]/1; 
+						else 
+							s2=ssr[m]/(m-p);
+							
+						if (1-R2_threshold)/(1-_r2)<10 then
+							s2=abs((1-R2_threshold)/(1-_r2))*s2;   
+						else 
+							s2=10*s2; 
+							 
+					end;
+				end; /* if PERFECT_FIT_CORRECTION */
+				
+				if output_beta>0 then do;
+					beta_all[,i] = beta;
+					if rank_problem = 0 then 
+						do k=1 to p;
+							beta_test[k,i] = (beta[k]) / sqrt(s2*iXpX[k,k]);
+							beta_p_values[k,i] = 2*(1-cdf('T', abs(beta_test[k, i]), m-p)); /* p values of test Beta = 0*/
+						end;
+				end;
+			
+			
+				if rank_problem = 1 then do;
+					MDR[m] = .; *10**20;
+				end;
+				else do;
+					Hi = j(n,1,.);
+					do k = 1 to n;
+					 z = x[k,];
+					 Hi[k,] = z * iXpX * z`;									/* external leverage */
+					end;
+					
+					DR  = abs(resid/sqrt(s2#(1+Hi)));							/* Deletion Residuals */
+					if m < n then
+				/*IMPORTANT workaround: at each step i =1:fs_step:n, we compute the fs_step minimum deletion residuals and we store them 
+					in the vector mdr in the current postion and in the following fs_step-1. This is a workaround due to the fact that we do
+					not have mdr at each step of the search but only every fs_step step.   */
+						do k = 0 to (fs_step-1);
+							if ncol(idx_out) > 0 & m+k<n then do;
+								mdr_idx = (DR[idx_out])[>:<];  /*>:< find index of minimum value in a vector, in this case th																				vector is the deletion residuals of outlying observation in the																				current FS step*/
+								mdr[m+k,1] = (DR[idx_out])[mdr_idx];			/* Minimal deletion residual of observations not in the subset */
+								idx_out = setdif(idx_out,idx_out[mdr_idx]);
+							end;
+						end;
+
+					if transformation_lambda ^= . then do;						/* Test transformation */
+						call estimateScoreTest(transformation_lambda, Xin, original_y[idx_in], ll);
+						BoxCoxScore[i]=ll;
+					end;
+				end;
+			
+				if keep_res then resid_all[,i] = resid; 
+				
+				if output_eda then do;
+				
+					 /* Asymmetry test */
+					 sqb1 = sum(resid[idx_in]##3)/m / (sum(resid[idx_in]##2)/m)**(3/2);
+					 nor[i, 1] = m/6 * sqb1**2;
+					 
+					 /* Kurtosis test */			
+					 b2 = sum(resid[idx_in]##4)/m / (sum(resid[idx_in]##2)/m)**(2);
+					 nor[i, 2] = m/24 * ((b2-3)**2);
+					 
+					 /* Normality test */
+					 nor[i, 3] = nor[i, 1] + nor[i, 2];
+					 if ^rank_problem then do;		
+						 /* Cook's distance */ 
+						 if all(beta_all[,i-1] ^= .) then do;
+							d_beta = beta_all[,i-1] - beta;
+							cooks[i, 1] = (d_beta`)*Xin`*Xin*d_beta/(p*s2); 			/* Cook's distance*/
+						 end;
+						 
+						 /* Modified cook's distance*/
+						 if s2_previous ^= . then do;
+							unit = Un_fsstep[i-1,];
+							idx_unit = loc(unit ^= .);				
+									
+							if nrow(idx_unit)>0 then do;
+								unit = unit[idx_unit];
+								if nrow(unit) > 5 then 
+									unit = unit[1:5];
+
+								cooks[i, 2:(nrow(unit)+1)] = (1/(1-hi[unit]) # sqrt((m-p)/p*hi[unit] # (vecdiag(resid[unit]*resid[unit]`)) / s2_previous))`	;	/* Modified Cook's distance*/
+							end;
+						end;
+					
+						/* Maximum studentized residual */
+						if any(Hi[idx_in] > 1) then
+							Hi[idx_in[loc(Hi[idx_in] > 1)]] = 1; /* Rare, but sometimes numerical instabilities cause problems */
+						
+						SR_in  = abs(resid[idx_in]/sqrt(s2#(1-Hi[idx_in])));
+						call sort(SR_in);
+						
+						MSR[i] = SR_in[m];
+						
+						/* R-squared */
+						r2[i]= 1 -  ssr[m] / ss_tot;
+						
+					end;
+					s2_previous = s2;
+
+				end;
+							
+							
+			end; /* If m > init */
+			
+			/* Select observations */
+			
+			if n >= m + 1 then do;
+				resid = abs(resid);
+				
+				if bsbmfullrank = "FORCE_END" & nrow(constr) > 0 & constr ^= . then
+					resid[constr] = max(resid)+1; /* Force these observations to be the last ones in the search */
+				
+				call sortndx(idx_sorted, resid);
+				
+				
+				if keep_selected = 1 then do;
+					if n > m + fs_step then 
+						selected[i+1,] =  (idx_sorted[1:(m+fs_step)])` || j(1,n-m-fs_step,.); 	/* Select observations */
+					else 
+						selected[i+1,] =  (idx_sorted[1:(min(m+fs_step,n))])`; 					/* Last step */
+						
+					entered_search = rowvec(setdif(selected[i+1,], selected[i,]));
+				end;
+				else do;
+					previous_selected = selected;
+					selected =  (idx_sorted[1:(min(m+fs_step,n))]);							/* Select observations */
+					entered_search = rowvec(setdif(selected, previous_selected));
+				end;
+
+				
+				if keep_selected = 2 & n > m + fs_step then do;
+					_bb = (m || (selected`) || j(1,n-m-fs_step,.));
+					append from _bb;
+				end;
+				
+				if ncol(entered_search) > max_interchange then do;
+					if debug then do;
+						print (cat("Warning: interchange greater than ", max_interchange, " when m=", m, ". Number of units which entered = ", (ncol(entered_search))));
+					end;
+					entered_search = rowvec(entered_search[1:10]);
+				end;
+				if ncol(entered_search) > ncol(Un_fsstep) then do;
+					Un_fsstep = Un_fsstep || j(nrow(Un_fsstep), ncol(entered_search) - ncol(Un_fsstep), .);
+				end;
+				
+				if m > init then 
+					Un_fsstep[i,1:ncol(entered_search)]=entered_search; 
+			end;
+			else if keep_res then /* step n */
+					resid_all = resid_all / sqrt(s2);
+		end; /* not lxs retry*/
+				
+	end; /* main loop of FS */
+
+	if keep_selected = 2 then do;
+		close work.bb;
+		selected="work.bb";
+	end;
+
+end; /* LXS tries*/	
+
+	/************************************************************/
+	/*     Check for signals		                            */
+	/*                                                          */
+	/************************************************************/
+*initSD=floor(n * 0.7);
+initSD=ncol(initial_obs_input);
+/*noutliers=0;*//*----------------to be fixed*/
+/*output_beta=0;*//*----------------to be fixed*/
+/*nnoutliers=0;*//*----------------to be fixed*/
+	CALL FSSignalDetection(
+			mdr,
+			n,
+			initSD,
+			p,
+			debug,
+			h_min, 
+			"DELETION", 
+			output_string /* output */,
+			md /* output */,
+			dataset,
+			x_original,
+			y_original, 
+			independent_varnames, 
+			last_env /* output */, 
+			output_dataset, 
+			options, 
+			m0, 
+			fs_step,
+			selected,
+			valid_observations_idx,
+			id_varname, 
+			id,
+			n_original,
+			outlier_classification /* output */,
+			merged_obs_nr,
+			bonflev,
+			noutliers);
+			/*beta on good observations*/ 
+			if output_beta>0 then do;
+				nnoutliers = sum(outlier_classification);
+				if nnoutliers > 0 then do;
+					lenbsb=ncol(initial_obs);
+					endbeta=(noutliers-1);
+					lenbeta=ncol(lenbsb:endbeta);
+					step_fs_pre_outl=floor(lenbeta/fs_step);
+					beta_outliers[step_fs_pre_outl]=1;
+					rob_beta=beta_all[,step_fs_pre_outl];
+				end;	
+				
+				print(beta_all);
+				print(beta_outliers);
+				print(rob_beta);
+			end;
+	
+	/************************************************************/
+	/*     Format output			                            */
+	/*                                                          */
+	/************************************************************/
+	if (nrow(Xin)-p)=0 then 
+		s2=ssr; 
+	else 
+		s2=ssr/(m-p);
+	s2 = ( (1:n)`|| s2);
+	mattrib s2 colname={"m" "S2"};
+	s2 = s2[loc(s2[,2] ^= .),];
+
+
+	if output_eda then do;
+		cooks= ((mm`) || cooks 	);
+		mattrib s2 colname={"m" "Cook's distance" "Modified Cook's distance"};
+		msr= ((mm`) || msr);
+		mattrib msr colname={"m" "Maximum studentized residual"};
+		nor = ( mm`|| nor);
+		mattrib nor colname={"m" "Asymmetry test" "Kurtosis test" "Normality test"};
+		r2= ((mm`) || r2);
+		mattrib r2 colname={"m" "R-squared"};
+		
+		cooks = cooks[loc(cooks[,2] ^= .),];
+		msr = msr[loc(msr[,2] ^= .),];
+		nor = nor[loc(nor[,2] ^= .),];
+		r2 = r2[loc(r2[,2] ^= .),];
+	end;	
+	
+	
+	/************************************************************/
+	/*     Plots					                            */
+	/*                                                          */
+	/************************************************************/
+	
+	/*if index(options, "NO_PLOTS") = 0 then do;*/
+	if add_plots > 0 then do;
+		
+		n_axis = floor((loc(Un_fsstep)-1)/ncol(Un_fsstep))+1;
+		obs_nr = Un_fsstep[loc(Un_fsstep)]`;
+		
+		tmp_var = setdif(1:n, obs_nr); /* included before FS began*/
+		
+		if ncol(tmp_var) > 0 then
+			n_axis = n_axis || j(1,ncol(tmp_var), 1); /* pretend these observations were added in the first step*/
+		obs_nr = obs_nr || tmp_var;
+
+	
+		run FSRenvmdr(env_quantiles`, init, n, p, ENV);
+		
+		declare DataObject dobj; 
+		dobj = DataObject.Create("Forward search data object");
+		dobj.AddVar("m", "Number of observations in the subset", mm[n_axis]);
+		dobj.AddVar("original_obs_nr", "Observation number", obs_nr);
+
+		if id_varname ^= "" then do;
+			dobj.AddVar(id_varname,id_varname, id[obs_nr]);
+			dobj.SetRoleVar(ROLE_LABEL, id_varname );
+		end;
+		else 
+			dobj.SetRoleVar(ROLE_LABEL, "m" );
+		
+		if index(options, "CLASSIFY") then dobj.AddVar("outlier_classification", "Outlier classification", outlier_classification[obs_nr]);
+
+		dobj.AddVar("mdr", "Minimum deletion residual",mdr[mm[n_axis]]);
+			
+	
+
+		/* Redirect the missing observations numbers because of singular matrices to a dummy record */
+
+				
+		/* Add x and y information of observations that were once MDR */
+		
+		dobj.AddVar(dependent_varname, dependent_varname, y[obs_nr]); 		
+		do k = 1 to ncol(independent_varnames); /* Intercept is the first column? */
+			*tmp_var = x[original_obs_nr[n_subset[1:(ncol(n_subset)-1)]],k] // .;
+			dobj.AddVar(independent_varnames[k], independent_varnames[k],  x[obs_nr,k]); 
+		end;
+                       
+		if index(options, "BETA")>0 then do;
+			varnames_p = j(p,1,"longvarnamelongvarnamelongvariablename");
+			varnames_t = j(p,1,"longvarnamelongvarnamelongvariablename");
+			varnames_beta = j(p,1,"longvarnamelongvarnamelongvariablename");
+
+			do k = 1 to ncol(independent_varnames);
+
+				dobj.AddVar(rowcatc("beta_p_" || independent_varnames[1,k]),rowcat("p-value of test beta " || independent_varnames[1,k] || " = 0"), beta_p_values[k,n_axis]`); 
+				dobj.AddVar(rowcatc("beta_test_" || independent_varnames[1,k]),rowcat("Test statistic of test beta " || independent_varnames[1,k] || " = 0"), beta_test[k,n_axis]`); 
+				dobj.AddVar(rowcatc("beta_" || independent_varnames[1,k]),rowcat("Estimated coefficient of variable " || independent_varnames[1,k]), beta_all[k,n_axis]`); 
+				
+				varnames_p[k]= rowcatc("beta_p_" || independent_varnames[1,k]);
+				varnames_t[k]=rowcatc("beta_test_" || independent_varnames[1,k]);
+				varnames_beta[k]=rowcatc("beta_" || independent_varnames[1,k]);
+			
+			end;
+		end;
+		
+		*
+		if transformation_lambda ^= . then
+			dobj.AddVar("BoxCoxScore", "Score of the Box Cox transformation", BoxCoxScore[n_axis]); 
+			
+			
+
+		/* Forward plot fo the minimum deletion residuals of observations not in the subset */
+		if index(options, "MDRPLOT")>0 then do;
+			
+			declare LinePlot plot;
+			plot = LinePlot.Create( dobj, "m", "mdr", 0);
+
+	/*	call FSRmdrplot( dobj, ENV, init, n, md, plot, output_string); */
+				/*the next if has been added to maintain or suppress the vertical line corresponding to mdagger*/
+				if index(options, "MDLINE") > 0 then
+					call FSRmdrplot( dobj, ENV, init, n, md, plot, output_string);
+				else
+					call FSRmdrplot( dobj, ENV, init, n, 0, plot, output_string);
+				plot.SetWindowPosition( 50, 0, 50, 50 );
+				
+				
+				plot.SetWindowPosition( 50, 0, 50, 50 );
+		end;
+
+		/* Plot of the superimposition of the envelopes */
+		
+		if index(options, "SUPERIMPOSE")>0 then do;
+			if index(output_string, "Bonferroni") > 0 then
+				print "Bonferroni signal: no superimposition done";
+			else if md = . | md = 0 then
+				print "No signal found: no superimposition done";
+			else do;
+					
+				left = 0;
+				width = min(max(100/(mdagger-md+1), 20),50);
+				do k = md to last_env;
+					
+					run FSRenvmdr(env_quantiles`, init, k, p, ENV_super);
+					call FSRmdrplot( dobj, ENV_super, min(init, md), k, ., plot, "", n);
+					
+					plot.SetWindowPosition(left, 50, width, 50 );
+					left = left + width;
+					if left >= 100 then left = 0;
+				end;
+			end;
+		end;
+		
+		/* Forward plot of the estimated beta coefficients */
+		width = 100 / p;
+		/*
+		if index(options, "BETA_P")>0 then do;
+			declare LinePlot beta_plot_p;
+			beta_plot_p = LinePlot.Create( dobj,  "m", varnames_p);
+			beta_plot_p.SetTitleText("Forward plot of the p-values for beta=0");
+			beta_plot_p.ShowTitle();
+			beta_plot_p.SetWindowPosition( 0, 0, 50, 50 );
+			call FormatPlot( beta_plot_p, init, n, 1);
+		end;
+		
+		if index(options, "BETA_T")>0 then do;
+			declare LinePlot beta_plot_t;
+			beta_plot_t = LinePlot.Create( dobj, "m", varnames_t);
+			beta_plot_t.SetTitleText("Forward plot of the t-test statistic for beta=0");
+			beta_plot_t.ShowTitle();
+			beta_plot_t.DrawUseDataCoordinates();
+			beta_plot_t.DrawLine((m0+1):n, j(n-m0,1,quantile('T', 0.975, n - p )));
+			beta_plot_t.DrawLine((m0+1):n, j(n-m0,1,quantile('T', 0.025, n - p )));
+			beta_plot_t.SetWindowPosition( 0, 0, 50, 50 );
+			
+			call FormatPlot( beta_plot_t, init, n, 50);
+			
+		end;
+		*/
+		if index(options, "BETA_PLOT")>0 then do;
+			
+			left = 0;
+			width = max(100/p, 20);
+			do i = 1 to p;
+
+				declare LinePlot beta_plot;
+				beta_plot = LinePlot.Create( dobj, "m", varnames_beta[i]);
+				beta_plot.SetTitleText("Forward plot of the estimated beta coefficients");
+				beta_plot.ShowTitle();
+				beta_plot.SetWindowPosition( left, 50, width, 50 );
+				beta_plot.SetAxisLabel(YAXIS, cat("Estimated coefficient of ", varnames_beta[i]));
+				
+				call FormatPlot( beta_plot, init, n, 50);
+				left = left + width;
+				if left >= 100 then left = 0;	
+			end;
+		
+		end;
+
+		
+		/* Plot of the residuals of each observations at every step*/
+	
+		if keep_res & (index(options, "RESFWDPLOT") >0) then do;
+			if index(options, "SQUARED_RESFWDPLOT") > 0 then 
+				resid_all = resid_all##2;
+
+			call fwdplot(resid_all, options, init, n, dobj, id, outlier_classification, mm);
+		
+		end;
+	
+		
+		if index(options, "SCATTERMATRIX") > 0 then		  
+			if add_intercept then
+				call CreateFullScatterMatrix(dobj, independent_varnames[1:(ncol(independent_varnames)-1)] // dependent_varname);
+			else
+				call CreateFullScatterMatrix(dobj, independent_varnames // dependent_varname);
+		else if index(options, "SCATTER") > 0 then	
+			if add_intercept then
+				call CreateScatterRow(dobj, independent_varnames[1:(ncol(independent_varnames)-1)], dependent_varname);
+			else
+				call CreateScatterRow(dobj, independent_varnames, dependent_varname);
+			
+	
+	end; 
+	
+finish;
+
+store module=FSR;
+
+
+
+

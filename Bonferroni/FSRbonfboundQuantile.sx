@@ -1,0 +1,20 @@
+/* IMPORTANT: This file is a copy of the original module definition. */
+start FSRbonfbound(n, p, init, prob = {0.01,0.5,0.99}, bonferroniEnv /*: output*/);
+	/* add len function */
+	start len(v);
+		return (ncol(v) * nrow(v));
+	finish;
+	
+	prob=rowvec(prob);
+	bonferroniEnv = j(n,len(prob),.);
+
+*pause;
+	do m = init to n-1;
+		do j = 1 to len(prob);
+			*bonferroniEnv[m,j] = abs(tinv((1-prob[j])/(m+1), m-p));
+			bonferroniEnv[m,j] = abs(quantile('T', (1-prob[j])/(m+1), m-p));
+		end;
+	end;
+*	pause;
+finish FSRbonfbound;
+store module=FSRbonfbound;

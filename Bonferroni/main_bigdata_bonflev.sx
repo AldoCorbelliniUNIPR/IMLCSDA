@@ -1,0 +1,26 @@
+/********************************/
+/*load loyalty data on original scale*/
+libname jrc "C:\benchmark_FSDA\ds_aida_aldo";
+use ("jrc.bigdatav9");		
+	read all var {'x1'	'x2' 'x3' 'x4' 'x5'} into x[colname=colnx];
+	*x    = j(nrow(x),1,1) || x; 		/* add intercept */	
+	read all var 'y' into y[colname=colny];
+close ("jrc.bigdatav9");	
+
+
+init_subset = {17491 10902 38034 9580 19179 15992 26815 15200 16309} ;
+/*next command + F11 to obtain Figures 2, 3, 4 and 5, that is mdr fwd plot, res fwd plot, scatteplots, beta fwd plots for 0.4 transformation*/
+*CALL FSR("jrc.bigdatav8", {'x1'	'x2' 'x3' 'x4' 'x5'}, "y", "CLASSIFY BETA")  initial_obs_input=init_subset fs_step =10 bonflev=0.80; 
+CALL FSR("jrc.bigdatav9", {'x1'	'x2' 'x3' 'x4' 'x5'}, "y", "CLASSIFY BETA")  initial_obs_input=init_subset bonflev=0.80 fs_step =10; 
+
+*pause;
+
+*seqa=(1:nrow(x))`;
+*print(seqa[outlier_classification=1,1]);
+*print(seqa || outlier_classification);
+
+
+
+indout=loc(outlier_classification=1);
+if (indout > 0) then;
+	print(indout);

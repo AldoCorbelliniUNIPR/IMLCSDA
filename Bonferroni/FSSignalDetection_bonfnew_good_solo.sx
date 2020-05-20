@@ -1,0 +1,440 @@
+start FSSignalDetection(RES,
+	n, init, p, debug, h_min, method, output_string, md, 
+	dataset, x, y=., independent_varnames=., 
+	last_env, output_dataset, options, m0, fs_step, selected,
+	valid_observation_idx, id_varname, id, n_original, outlier_classification, merged_obs_nr = ., bonflev);
+
+	if index(options, "SUPERIMPOSE")> 0  | index(options, "CLASSIFY")> 0 | index(options, "EXPORT")> 0 then do;
+		
+		call stage1(RES, mdagger, n, init, bonferroni, p, debug, h_min, method, output_string, bonflev);
+		 
+		 if bonflev =. then do;
+		 
+		  if nrow(mdagger) > 0 then do;/* signal found */
+			md = mdagger; /* Location of the (verified) signal*/
+				
+			mdagger = mdagger[1]; /* retain only the middle value if it was a triplet*/
+			if mdagger > 0 then
+				if bonferroni then do; /* Bonferroni signal */
+					if debug then 
+						print (cat("Subsample of ", mdagger-1, " units is homogeneous"));
+						run stage2(RES, mdagger, n, init, p, debug, "DELETION", last_env);	
+				end;
+				else do; 
+	
+					run stage2(RES, mdagger, n, init, p, debug, "DELETION", last_env);	
+					/* mdagger is now the size of the homogeneous subset + 1 (= the 
+						step after which units that enter are considered outliers) */
+					
+				end;
+		    end;
+		 end;
+		 else if bonflev ^=.  then do;
+		 *pause;
+		    /* retain only the middle value if it was a triplet*/
+			mdagger = mdagger[1]; 
+			*mdagger = max(mdagger); 
+			md = mdagger;
+			*pause;
+		 end;
+				
+		if index(options, "CLASSIFY")  | index(options, "EXPORT")> 0 then do;
+				
+			if mdagger = . | mdagger = 0 then homogeneous_subsample = (1:n);
+			else do; 
+				
+				idx = floor((mdagger - m0 - 1)/fs_step) + 1;
+				*pause;
+				if type(selected) =  'N' then do; 
+				   if bonflev =. then do;
+					homogeneous_subsample = selected[idx, 1:(mdagger-1)];
+				   end;
+				   else if bonflev ^=. then do;
+					homogeneous_subsample = selected[idx+1, 1:(mdagger)];
+				   end;	
+					homogeneous_subsample = homogeneous_subsample[loc(homogeneous_subsample^= .)];
+					*pause;
+				end;
+				else do;
+					use (selected);
+						read point idx into homogeneous_subsample;
+					close (selected);
+					homogeneous_subsample = homogeneous_subsample[loc(homogeneous_subsample^= .)];
+					
+				end;
+				outliers = setdif(1:n, homogeneous_subsample);
+	            *pause;
+			end;
+			
+			if debug then do;
+				if mdagger = . | mdagger = 0 then print "No outliers detected";
+				else
+					if id_varname ^= "" then
+						print (cat(ncol(outliers), " outliers  detected: ")), (id[outliers]);
+					else 
+						print (cat(ncol(outliers), " outliers  detected: ")), outliers;
+			end;
+				
+			/* Classification of units that were not excluded because of missing values */
+			_nonmissclass = j(n,1,1);
+			_nonmissclass[homogeneous_subsample] = 0;
+			
+
+	
+			/* Restore the original indices, sets the outlier classification of observations with missing values to missing */
+			outlier_classification = j(n_original,1,.);
+			outlier_classification[valid_observation_idx] = _nonmissclass;
+			
+			/* Classification of merged observations */
+			if nrow(merged_obs_nr) > 1 then do;
+				do k = 1 to nrow(merged_obs_nr);
+					outlier_classification[merged_obs_nr[k,2]] = outlier_classification[merged_obs_nr[k,1]];
+				end;
+			end;
+			
+			/* Export to a dataset */
+			if index(options, "EXPORT") > 0 then do;
+
+	
+				OUTLIER = outlier_classification; * make local copy ;
+				create work.outliers var {OUTLIER};
+					append;
+				close work.outliers;
+				
+				if dataset = "" then do;
+					create (output_dataset) from x[colname=independent_varnames];
+						append from x;
+					close (output_dataset);
+					if method="DELETION" then do;
+						create work.out_y from y[colname='y'];
+							append from y;
+						close work.out_y;
+
+						submit output_dataset;
+							data &output_dataset;
+								merge &output_dataset out_y work.outliers  ;
+							run;
+						endsubmit;
+					end;
+					else if method="MAHALANOBIS" then do;
+						submit output_dataset;
+							data &output_dataset;
+								merge &output_dataset work.outliers  ;
+							run;
+						endsubmit;
+					end;
+					
+				end;
+				else do;
+					submit dataset output_dataset;
+						data &output_dataset;
+							merge &dataset work.outliers;
+						run;
+					endsubmit;
+				end;
+				
+
+			end;
+		end;
+	end;
+	else md = .;
+
+finish FSSignalDetection;
+store module=FSSignalDetection;
+
+
+
+/************************************************************/
+/*        STAGE 1                                           */
+/*                                                          */
+/*                                                          */
+/************************************************************/
+
+start stage1(RES, signal, n, init, bonferroni, p, debug, h_min, method, output_string, bonflev);
+	
+	if debug then print "starting stage 1";
+	
+	output_string = "";
+		
+		
+	if method="MAHALANOBIS" then do;
+		run FSMenvmmd({0.99999 0.9999 0.999 0.99 0.01}`, init, n, p, ENV);
+		if bonflev < 1 then
+			run FSMbonfbound(n, p, init, bonflev, bonferroniEnv);
+		else 
+			bonferroniEnv = j(n,1,bonflev);
+		
+	end;
+	else if method = "DELETION" then do;
+		run FSRenvmdr({0.99999 0.9999 0.999 0.99 0.01}`, init, n, p, ENV);
+		
+		if bonflev < 1 then
+			run FSRbonfbound(n, p, init, bonflev, bonferroniEnv);
+		else 
+			bonferroniEnv = j(n,1,bonflev);
+	end;
+	else do;
+		print "ERROR: unknown method in module stage1";
+		abort;
+	end;
+	/* columns returned: ENV{OBSIN 99.999% 99.99% 99.9% 99% 1%} */
+	
+
+	istep = n - int(13*sqrt(n/200)); /* division between central part and final part of the search */
+	signal = 0;
+	sigfound = 0;
+	*bonferroniEnv = ENV[n-1, 4]; /*envelope for bonferroni signal. Replaced with exact bounds. */
+	gminbonf = ENV[n-1, 4]; /*envelope for bonferroni signal. Replaced with exact bounds. */
+	bonferroni = 0;
+	
+		do k = init  to n - 1;
+          if bonflev  ^=. then do;
+		  *print(k);
+		  * Outlier detection based on Bonferroni threshold;
+           if RES[k] > bonferroniEnv[k] & sigfound =0 then do;
+		     signal = k;
+			 sigfound = 1;
+		     
+		   end;	
+		 end;
+		 
+	    end;
+
+	
+finish stage1;
+store module = stage1;
+
+/************************************************************/
+/* 		STAGE1b				                                */
+/*                                                          */
+/* Detects if the potential signal at time n is a true signal according to 4 conditions
+
+Input arguments:
+
+RES: matrix containing the r_min
+ENV: matrix containing the estimated envelopes
+n: total number of observations
+init: initial subset size
+k: signal that should be tested
+
+Output arguments:
+signal: number of observations in search when signal was validated
+
+Prints: type of signal:
+a)
+b)
+c)
+d)
+
+************************************************************/	
+start stage1b(RES, ENV, init, n, k, signal, p, debug, h_min, method, output_string);
+
+
+	/*if debug then do;
+
+		if RES[k] > ENV[k, 2] then print "signal 2 detected at step m^dagger = " k ;
+		else print "signal 1 detected at step m^dagger = " _z;
+		print "starts stage 1b: signal validation";
+	end;
+	*/
+	if sum(RES[(k-1):(k+1)] > ENV[(k-1):(k+1), 1]) = 3 then do;
+		signal = k;
+		output_string = (cat("Signal is B with ", signal ," observations in search: 
+		3 consecutive values of r_min above the 99.999% threshold: ", (signal-1), ", ", signal, " and ", (signal+1)));
+		if debug then 
+			print output_string;
+		signal = k // (k-1) // (k+1);
+	end;
+	else if sum(RES[(init ):k] 
+				> ENV[(init):k,1]) >= H_MIN then 
+	do;
+		signal = k ;
+		output_string = (cat("Signal is C with ", signal, " observations in search: 
+		There are ", h_min ,", values in total above the 99 % threshold, the final one occuring at ", signal));
+		if debug then 
+			print output_string;
+		
+	end;
+	else if RES[k] > ENV[n-1, 5] then do;
+		signal = k;
+		output_string = (cat("Signal is D with ", signal, " observations in search: 
+		The r_min ", (RES[k]), " is above the last value of the 1% threshold "));
+		if debug then
+			print output_string;
+	end;
+	else do;
+		_pointsToCheck = min(30, n - k); 
+		if sum(RES[(k+1):(k+_pointsToCheck)] < ENV[n-1, 5]) >= 2 then do;
+			signal = k;
+			output_string = (cat("Signal is E with ", signal, ", observations in search: 
+			There are at least two values below the 1% envelope based on ", n, " observations 
+			within the steps going from ", (k ), " to " ,(k+_pointsToCheck)));
+			if debug then 
+				print output_string;
+
+		end; 
+	end;
+
+finish stage1b; store module = stage1b;
+
+start stage2(RES, md, n, init, p, debug, method, last_envelope);
+	if debug then
+		print "Starting stage 2";
+
+	/*md = m dagger, n = total obs, RES - minimum deletion residual matrix*/
+	
+	*md = mdagger_in; /* Number of observations in FS when signal takes place */
+
+	mdagger = .; /* will be equal (mdagger + k) in paper: this is the place where the first outlier is detected */
+	mstar = .;	 /* for signal S1 */
+	mstar_ = .;  /* for signal S2 */
+
+	if debug then
+		print "superimpose first envelope based on " (md-1)  " obs, last " n ;
+	
+	if md < 5 & md ^= . then md = 5;
+	
+	do tr = md -1 to n; /* Iterate over all values ranging from mdagger to the final observation to enter  tr=treshold*/
+		
+		if method="MAHALANOBIS" then
+			run FSMenvmmd({0.99 0.999}`, init, tr, p, ENV);
+		else if method = "DELETION" then
+			run FSRenvmdr({0.99 0.999 0.01}`, init, tr, p, ENV);
+		else do;
+			print "ERROR: unknown method in module stage2";
+			abort;
+		end;
+	
+		if debug then do;        
+			print "superimposing envelope based on " tr " observations";
+		end;
+		
+		seqe=1:nrow(ENV);
+		ENV=(seqe` || ENV);
+		
+				
+	if (md-1) <	(nrow(ENV)-1) then do;		
+      do ii=(md-1)  to (nrow(ENV)-1);  /* last row contains quantiles! */
+	  
+				
+	  /*
+		print(cat("tr=",tr," ii=",ii));
+		print(cat(" mdr=", RES[ii], ">ENV[ii, 1]=",ENV[ii, 1], "& ii=", ii, ">=", (nrow(ENV) -2)));
+		print(cat("ii=", ii, "<", (nrow(ENV) -2), " & mdr=", RES[ii], "> ENV[ii, 2]",ENV[ii, 2] ));
+*/
+		if RES[ii] > ENV[ii, 2] & ii >= (nrow(ENV) -3) then do;
+			mstar = tr - 3;
+			mdagger = tr - 1;
+			if debug then do;
+				print (cat("signal S1 (second observation before the last) with obs in search ", mstar, ": r_min(", mstar, ", ", tr, ") > 99%"));
+			end;	
+			mstar = min(mstar, mstar_);  
+			realii=ii;
+			realtr=tr;
+			ii = nrow(ENV);
+			tr = n;
+		end;
+		
+		else if ii < (nrow(ENV) -3) & RES[ii] > ENV[ii, 3]  then do;		
+			mstar = tr  - 2;
+			mdagger = tr - 1;
+			if debug then do;
+				print (cat("signal S2 (observations before the last) with obs in search ", mstar, ": r_min(", mstar, ", ", tr, ") > 99%"));
+			end;
+			mstar = min(mstar, mstar_); 
+			realii=ii;
+			realtr=tr;
+			ii = nrow(ENV);
+			tr = n;
+		end;
+
+		last_envelope = tr;
+
+		*	if debug then
+				print "mstar = " mstar  ", mstar_ = " mstar_  ", mdagger = " mdagger ; 
+		
+	 end; /* inner loop */
+    end; /* if inner loop is runnable */
+	end; /* end main loop */
+	md = mdagger +1;
+
+	if debug then
+		print "Finished stage 2";
+
+
+/* Stage 2a: subset validation
+   In this part we check whether the subset is homogeneous. */
+   
+   /* reset tr and ii to real values; */
+
+			ii=realii;
+			tr=realtr;
+			seqa=1:n;
+			mdr=(seqa` || RES);
+	
+	if (mdr[ii,1] < (tr-1)) then do; /* main branch */
+            /* Condition H2b and H2a; */
+			linend=nrow(ENV)-1;
+
+            if sum(ENV[ii+1:linend,4] > mdr[ii+1:(nrow(ENV)-1),2]) > 0 then do;
+				print(cat('Subsample of ', (tr-1), ' units is not homogeneous because the curve was above 99.99% and later it was below 1%'));
+                /* Find m^{1%} that is the step where mdr goes below the 1%
+                % threshold for the first time
+                % gfind = concatenate all the steps from m^*+1 to m^\dagger+k-1; */
+                
+				*gfind=(ENV[ii+1:linend,1] || ENV[ii+1:linend,4] > mdr[ii+1:(nrow(ENV)-1),2]);
+                gfind=((ENV[ii+1:linend,4] > mdr[ii+1:(nrow(ENV)-1),2]));
+				gfind=(ENV[ii+1:linend,1] || gfind);
+
+				/* select from gfind the steps where mdr was below 1% threshold
+                % gfind(1,1) contains the first step where mdr was below 1%; */
+                tmp=gfind[,2];
+				gfind=gfind[loc(tmp),1];
+                /* find maximum in the interval m^\dagger=mdr(i,1) to the step
+                % prior to the one where mdr goes below 1% envelope; */
+                if nrow(gfind)=1 then do;
+                    tr=gfind;
+				end;	
+                else do;
+				
+                    /* Make sure that gfind(1,1)-mdr(1,1) is not smaller
+                    % than i otherwise tr  becomes empty;*/
+                    if gfind[1,1]-mdr[init,1] >= ii then do;
+                        /* tr=sort(RES[i:gfind[1,1]-RES[1,1],1:2],2); */
+						tmpmat=mdr[ii:gfind[1,1]-mdr[init,1],1:2];
+						*pause;
+						call sortndx(ndx, tmpmat, 2);
+						tr=tmpmat[ndx,];
+						tr=tr[nrow(tr), 1];
+						
+                    end;
+					else do;
+						tr=mdr[init,1];
+                    end;
+                end;
+                print('Probably there are two overlapping groups');
+                print(cat('Using the criterion of the maximum, the group of homogenous obs. is=', tr));
+               
+                /* tr is redefined and is associated with the step associated to
+                % the maximum value of r_min
+                % try=sormcl[rows(sormcl),1]+1; */
+                tr=tr+1;
+            end;
+			else do;
+			if debug then
+                print(cat('Subsample of ', (tr-1), ' units is homogeneous'));      
+            end;
+      
+         ndecl=n-tr+1;
+		md=tr;
+	end;
+		
+	
+    if debug then
+		print "Finished stage 2a";
+		
+
+
+	
+finish stage2; store module = stage2;
+/*** statement block separator ***/
