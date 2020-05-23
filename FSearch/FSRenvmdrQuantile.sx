@@ -1,0 +1,41 @@
+/************************************************************/
+/* This module approximates envelopes.                      */
+/*                                                          */
+/************************************************************/
+
+start FSRenvmdr(prob, init, n, p, output);
+	 /* n 	- full sample size
+	    prob - probability
+	    p 	- regParameters - regression parameters
+	    init 	- initSubsample                             */
+	prob = colvec(prob);
+	
+	_prob_ = 1 - prob;
+	min_sca = j(n, nrow(_prob_), .);
+	min_uns = j(n, nrow(_prob_), .);
+	
+	do m = init to n-1;
+		if m <= p then do;
+			min_sca[m, 1:ncol(min_sca)] = .;
+		end;
+		else do;
+			quant = quantile('F', _prob_, 2*(n-m),2*(m+1));
+			q = (m+1)/(m+1+(n-m)*(quant)`);
+			min_sca[m, 1:ncol(min_sca)] = abs(quantile('T', 0.5*(1+q), m - p));
+			
+			z = 0.5*(1-m/n);
+			lo = probit(z);
+			hi = probit(m/n + z);
+			corr = 1 - (hi * pdf('NORMAL', hi) - lo * pdf('NORMAL',lo)) /
+						(cdf('NORMAL', hi) - cdf('NORMAL', lo))
+						-((pdf('NORMAL', hi) - pdf('NORMAL', lo)) /
+						(cdf('NORMAL', hi) - cdf('NORMAL', lo)))**2;
+
+			min_uns[m, 1:ncol(min_uns)] = min_sca[m , 1:ncol(min_sca)]/sqrt(corr);
+		end;
+	end;
+	min_uns[n, 1:ncol(min_uns)] = prob`; /* The last row of the return matrix contains the quantiles of each column */
+	
+	output = min_uns;
+finish FSRenvmdr;	
+store module=FSRenvmdr;
