@@ -10,6 +10,10 @@ orbs:
 #      type: string    
 jobs:
   build:
+    parameters:
+      cattotest:
+        default: "regression"
+        type: string    
      machine:
          image: ubuntu-1604:201903-01
      steps:
@@ -25,7 +29,7 @@ workflows:
     # Run the welcome/run job in its own container
     jobs:
       - build:
-#          cattotest: "regression"
+          cattotest: "regression"
 
 # version: 2.1
 # jobs:
