@@ -11,16 +11,15 @@ orbs:
 jobs:
   build:
     parameters:
-      cattotest:
-        default: "regression"
-        type: string    
+      p:
+        default: 1
+        type: integer    
      machine:
          image: ubuntu-1604:201903-01
      steps:
         - checkout
         - matlab/install                       # previously `wget ...`
-        - matlab/run-command:                  # previously `matlab -batch ...`
-#           command: "disp('Hello << parameters.cattotest >>')"         
+        - matlab/run-command:                  # previously `matlab -batch ...`   
            command: "disp('Hello world')"     
 # Orchestrate or schedule a set of jobs
 workflows:
@@ -29,7 +28,7 @@ workflows:
     # Run the welcome/run job in its own container
     jobs:
       - build:
-          cattotest: "regression"
+          p: "regression"
 
 # version: 2.1
 # jobs:
