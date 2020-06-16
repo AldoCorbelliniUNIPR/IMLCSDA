@@ -10,10 +10,10 @@ orbs:
 #      type: string    
 jobs:
   build:
-    parameters:
-      p:
-        default: 1
-        type: integer    
+     parameters:
+       p:
+         default: 1
+         type: integer    
      machine:
          image: ubuntu-1604:201903-01
      steps:
