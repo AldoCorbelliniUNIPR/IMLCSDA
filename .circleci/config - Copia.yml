@@ -1,27 +1,13 @@
+# Use the latest 2.1 version of CircleCI pipeline process engine. See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
+# Use a package of configuration called an orb.
 orbs:
-  matlab: mathworks/matlab@0.1
-jobs:
-  "fsda":
-  # parameters:
-  #   cattotest:
-  #     type: string    
-      build:
-      environment: 
-        #- CATEGORY_TO_TEST: << parameter.categorytotest >>
-        - CATEGORY_TO_TEST: "regression"
-      machine:
-        image: ubuntu-1604:201903-01
-      steps:
-      - checkout
-      - matlab/install                       # previously `wget ...`
-      - matlab/run-command:                  # previously `matlab -batch ...`
-          command: "disp('Hello World')"         
-
+  # Declare a dependency on the welcome-orb
+  welcome: circleci/welcome-orb@0.4.1
+# Orchestrate or schedule a set of jobs
 workflows:
-  build:
+  # Name the workflow "welcome"
+  welcome:
+    # Run the welcome/run job in its own container
     jobs:
-      - "fsda"
-          # cattotest: "regression"
-       
-
+      - welcome/run
