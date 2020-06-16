@@ -4,13 +4,12 @@ version: 2.1
 orbs:
   # Declare a dependency on the welcome-orb
   matlab: mathworks/matlab@0.1
-parameters:
-   cattotest:
-     default: "regression"
-     type: string    
+# parameters:
+#    cattotest:
+#      default: "regression"
+#      type: string    
 jobs:
-  "fsda":
-     build:
+  build:
      machine:
          image: ubuntu-1604:201903-01
      steps:
@@ -21,8 +20,25 @@ jobs:
 # Orchestrate or schedule a set of jobs
 workflows:
   # Name the workflow "welcome"
-  build:
+  uno:
     # Run the welcome/run job in its own container
     jobs:
-      - "fsda":
-          cattotest: "regression"
+      - build:
+#          cattotest: "regression"
+
+# version: 2.1
+# jobs:
+#   build:
+#     parameters:
+#       p:
+#         type: integer
+#         default: 1
+#     parallelism: << parameters.p >>
+#     machine: true
+#     steps:
+#       - checkout
+# workflows:
+#   workflow:
+#     jobs:
+#       - build:
+#           p: 2
