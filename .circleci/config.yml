@@ -4,6 +4,9 @@ version: 2.1
 orbs:
   # Declare a dependency on the welcome-orb
   matlab: mathworks/matlab@0.1
+parameters:
+   cattotest:
+     type: string    
 jobs:
   "fsda":
      build:
