@@ -5,7 +5,7 @@ orbs:
   # Declare a dependency on the welcome-orb
   matlab: mathworks/matlab@0.1
 jobs:
-  pippo:
+  testing:
      parameters:
        p:
          default: 1
@@ -21,14 +21,15 @@ jobs:
         - checkout
         - matlab/install                       # previously `wget ...`
         - matlab/run-command:                  # previously `matlab -batch ...`   
-           command: "disp(['Hello World num. ' num2str(<< parameters.p >>) ' ' getenv('CATEGORY_TO_TEST')])"     
+           #command: "disp(['Hello World num. ' num2str(<< parameters.p >>) ' ' getenv('CATEGORY_TO_TEST')])"     
+           command: "run runAllMyTestsFS.m"     
 # Orchestrate or schedule a set of jobs
 workflows:
   # Name the workflow "welcome"
-  uno:
+  fsdatoolbox:
     # Run the welcome/run job in its own container
     jobs:
-      - pippo:
+      - testing:
           matrix:
              parameters:
                   q: ["regression", "regressionTS", "regressionLTSts", "regressionEXT", "graphics", "multivariate", "multivariate-clustering", "regression-clustering", "mixsim", "utilities", "tclustMULT"]
