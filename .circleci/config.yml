@@ -28,7 +28,7 @@ workflows:
     # Run the welcome/run job in its own container
     jobs:
       - build:
-          p: "regression"
+          p: 2
 
 # version: 2.1
 # jobs:
