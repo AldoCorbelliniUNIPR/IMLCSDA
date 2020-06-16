@@ -9,7 +9,7 @@ orbs:
 #      default: "regression"
 #      type: string    
 jobs:
-  build:
+  pippo:
      parameters:
        p:
          default: 1
@@ -27,22 +27,6 @@ workflows:
   uno:
     # Run the welcome/run job in its own container
     jobs:
-      - build:
+      - pippo:
           p: 2
 
-# version: 2.1
-# jobs:
-#   build:
-#     parameters:
-#       p:
-#         type: integer
-#         default: 1
-#     parallelism: << parameters.p >>
-#     machine: true
-#     steps:
-#       - checkout
-# workflows:
-#   workflow:
-#     jobs:
-#       - build:
-#           p: 2
