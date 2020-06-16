@@ -8,7 +8,6 @@ parameters:
    cattotest:
      default: "regression"
      type: string    
-
 jobs:
   "fsda":
      build:
@@ -18,9 +17,7 @@ jobs:
         - checkout
         - matlab/install                       # previously `wget ...`
         - matlab/run-command:                  # previously `matlab -batch ...`
-           command: "disp('Hello World')"         
-
-
+           command: "disp('Hello << parameters.cattotest >>')"         
 # Orchestrate or schedule a set of jobs
 workflows:
   # Name the workflow "welcome"
