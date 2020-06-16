@@ -16,7 +16,8 @@ jobs:
         - checkout
         - matlab/install                       # previously `wget ...`
         - matlab/run-command:                  # previously `matlab -batch ...`
-           command: "disp('Hello << parameters.cattotest >>')"         
+#           command: "disp('Hello << parameters.cattotest >>')"         
+           command: "disp('Hello world')"     
 # Orchestrate or schedule a set of jobs
 workflows:
   # Name the workflow "welcome"
