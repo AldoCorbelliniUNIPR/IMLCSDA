@@ -10,19 +10,19 @@ jobs:
        p:
          default: 1
          type: integer    
-       q:
+       func-sections:
          default: "regression"
          type: string    
      environment:
-       CATEGORY_TO_TEST: << parameters.q >>  
+       CATEGORY_TO_TEST: << parameters.func-sections >>  
      machine:
          image: ubuntu-1604:201903-01
      steps:
         - checkout
         - matlab/install                       # previously `wget ...`
         - matlab/run-command:                  # previously `matlab -batch ...`   
-           #command: "disp(['Hello World num. ' num2str(<< parameters.p >>) ' ' getenv('CATEGORY_TO_TEST')])"     
-           command: "run runAllMyTestsFS.m"     
+           command: "disp(['Hello World num. ' num2str(<< parameters.func-sections >>) ' ' getenv('CATEGORY_TO_TEST')])"     
+           #command: "run runAllMyTestsFS.m"     
 # Orchestrate or schedule a set of jobs
 workflows:
   # Name the workflow "welcome"
@@ -32,5 +32,5 @@ workflows:
       - testing:
           matrix:
              parameters:
-                  q: ["regression", "regressionTS", "regressionLTSts", "regressionEXT", "graphics", "multivariate", "multivariate-clustering", "regression-clustering", "mixsim", "utilities", "tclustMULT"]
+                  func-sections: ["regression", "regressionTS", "regressionLTSts", "regressionEXT", "graphics", "multivariate", "multivariate-clustering", "regression-clustering", "mixsim", "utilities", "tclustMULT"]
 
